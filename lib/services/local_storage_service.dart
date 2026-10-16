@@ -27,6 +27,7 @@ class LocalStorageService {
 
     try {
       final decoded = jsonDecode(raw) as List<dynamic>;
+
       return decoded
           .whereType<Map>()
           .map((item) => Map<String, dynamic>.from(item))
@@ -54,8 +55,7 @@ class LocalStorageService {
 
     final exists = users.any(
       (user) =>
-          (user['email'] as String? ?? '').toLowerCase() ==
-          normalizedEmail,
+          (user['email']?.toString() ?? '').toLowerCase() == normalizedEmail,
     );
 
     if (exists) return null;
@@ -116,7 +116,7 @@ class LocalStorageService {
 
   Future<void> setSession(String email) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_sessionKey, email.toLowerCase());
+    await prefs.setString(_sessionKey, email.trim().toLowerCase());
   }
 
   Future<void> logout() async {
@@ -126,12 +126,14 @@ class LocalStorageService {
 
   Future<List<Appointment>> getAppointments(String email) async {
     final records = await _readRecords(_appointmentsKey);
-    final normalizedEmail = email.toLowerCase();
+    final normalizedEmail = email.trim().toLowerCase();
 
     return records
-        .map(Appointment.fromMap)
-        .where((appointment) =>
-            appointment.accountEmail.toLowerCase() == normalizedEmail)
+        .map((record) => Appointment.fromMap(record))
+        .where(
+          (appointment) =>
+              appointment.accountEmail.toLowerCase() == normalizedEmail,
+        )
         .toList()
       ..sort(
         (a, b) => a.appointmentDate.compareTo(b.appointmentDate),
@@ -142,7 +144,7 @@ class LocalStorageService {
     final records = await _readRecords(_appointmentsKey);
 
     final exists = records.any(
-      (record) => record['id'] == appointment.id,
+      (record) => record['id'].toString() == appointment.id.toString(),
     );
 
     if (exists) {
@@ -157,8 +159,9 @@ class LocalStorageService {
 
   Future<bool> updateAppointment(Appointment appointment) async {
     final records = await _readRecords(_appointmentsKey);
+
     final index = records.indexWhere(
-      (record) => record['id'] == appointment.id,
+      (record) => record['id'].toString() == appointment.id.toString(),
     );
 
     if (index == -1) return false;
@@ -172,12 +175,13 @@ class LocalStorageService {
   Future<bool> deleteAppointment(int id, String email) async {
     final records = await _readRecords(_appointmentsKey);
     final originalLength = records.length;
+    final normalizedEmail = email.trim().toLowerCase();
 
     records.removeWhere(
       (record) =>
-          record['id'] == id &&
-          (record['accountEmail'] as String? ?? '').toLowerCase() ==
-              email.toLowerCase(),
+          record['id'].toString() == id.toString() &&
+          (record['accountEmail']?.toString() ?? '').toLowerCase() ==
+              normalizedEmail,
     );
 
     if (records.length == originalLength) return false;

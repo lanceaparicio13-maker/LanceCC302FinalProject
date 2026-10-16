@@ -4,11 +4,11 @@ class Appointment {
   final String specialty;
   final String patientName;
   final String reason;
-  final String appointmentDate;
-  final String status;
+  final DateTime appointmentDate;
   final String accountEmail;
+  final String status;
 
-  const Appointment({
+  Appointment({
     required this.id,
     required this.doctorName,
     required this.specialty,
@@ -19,27 +19,40 @@ class Appointment {
     this.status = 'Scheduled',
   });
 
-  Map<String, dynamic> toMap() => {
-        'id': id,
-        'doctorName': doctorName,
-        'specialty': specialty,
-        'patientName': patientName,
-        'reason': reason,
-        'appointmentDate': appointmentDate,
-        'status': status,
-        'accountEmail': accountEmail,
-      };
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'doctorName': doctorName,
+      'specialty': specialty,
+      'patientName': patientName,
+      'reason': reason,
+      'appointmentDate': appointmentDate.toIso8601String(),
+      'accountEmail': accountEmail,
+      'status': status,
+    };
+  }
 
   factory Appointment.fromMap(Map<String, dynamic> map) {
     return Appointment(
-      id: (map['id'] as num).toInt(),
-      doctorName: map['doctorName'] as String? ?? '',
-      specialty: map['specialty'] as String? ?? '',
-      patientName: map['patientName'] as String? ?? '',
-      reason: map['reason'] as String? ?? '',
-      appointmentDate: map['appointmentDate'] as String? ?? '',
-      accountEmail: map['accountEmail'] as String? ?? '',
-      status: map['status'] as String? ?? 'Scheduled',
+      id: map['id'] is int
+          ? map['id'] as int
+          : int.tryParse(map['id']?.toString() ?? '') ?? 0,
+      doctorName: map['doctorName']?.toString() ?? '',
+      specialty: map['specialty']?.toString() ?? '',
+      patientName: map['patientName']?.toString() ?? '',
+      reason: map['reason']?.toString() ?? '',
+      appointmentDate: DateTime.tryParse(
+            map['appointmentDate']?.toString() ?? '',
+          ) ??
+          DateTime.now(),
+      accountEmail: map['accountEmail']?.toString() ?? '',
+      status: map['status']?.toString() ?? 'Scheduled',
     );
+  }
+
+  Map<String, dynamic> toJson() => toMap();
+
+  factory Appointment.fromJson(Map<String, dynamic> json) {
+    return Appointment.fromMap(json);
   }
 }
