@@ -1,6 +1,10 @@
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'auth_screen.dart';
 import '../models/app_user.dart';
 import '../models/appointment.dart';
@@ -28,15 +32,30 @@ class _HomeScreenState extends State<HomeScreen> {
 
   int _selectedIndex = 0;
   bool _loadingDoctors = true;
+  bool _draftResumeChecked = false;
   String? _doctorError;
   String _specialty = 'All';
+
   List<Doctor> _doctors = [];
   List<Appointment> _appointments = [];
+
+  String get _draftKey =>
+      'medbook_booking_draft_${widget.user.email.toLowerCase()}';
 
   List<String> get _specialties => [
         'All',
         ...DoctorApiService.specialties,
       ];
+
+  static const List<String> _times = [
+    '09:00 AM',
+    '10:00 AM',
+    '11:00 AM',
+    '01:00 PM',
+    '02:00 PM',
+    '03:00 PM',
+    '04:00 PM',
+  ];
 
   @override
   void initState() {
@@ -53,6 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _message(String text) {
     if (!mounted) return;
+
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -64,20 +84,26 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadDoctors() async {
-    setState(() {
-      _loadingDoctors = true;
-      _doctorError = null;
-    });
+    if (mounted) {
+      setState(() {
+        _loadingDoctors = true;
+        _doctorError = null;
+      });
+    }
 
     try {
       final doctors = await _doctorService.fetchDoctors();
       if (!mounted) return;
+
       setState(() {
         _doctors = doctors;
         _loadingDoctors = false;
       });
+
+      await _resumeBookingDraft();
     } catch (_) {
       if (!mounted) return;
+
       setState(() {
         _doctorError = 'Could not load profiles. Check your connection.';
         _loadingDoctors = false;
@@ -95,6 +121,85 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {
       _message('Could not load appointments.');
     }
+  }
+
+  Future<void> _saveBookingDraft({
+    required Doctor doctor,
+    required String patientName,
+    required String reason,
+    required DateTime date,
+    required String time,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      await prefs.setString(
+        _draftKey,
+        jsonEncode({
+          'doctorName': doctor.name,
+          'specialty': doctor.specialty,
+          'patientName': patientName,
+          'reason': reason,
+          'date': date.toIso8601String(),
+          'time': time,
+        }),
+      );
+    } catch (_) {
+      _message('Could not save the booking draft.');
+    }
+  }
+
+  Future<Map<String, dynamic>?> _readBookingDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_draftKey);
+
+      if (raw == null || raw.isEmpty) return null;
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+
+      return Map<String, dynamic>.from(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _clearBookingDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_draftKey);
+    } catch (_) {
+      _message('The saved draft could not be cleared.');
+    }
+  }
+
+  Future<void> _resumeBookingDraft() async {
+    if (_draftResumeChecked || !mounted) return;
+
+    _draftResumeChecked = true;
+
+    final draft = await _readBookingDraft();
+    if (!mounted || draft == null) return;
+
+    final doctorName = draft['doctorName'] as String?;
+    final specialty = draft['specialty'] as String?;
+
+    Doctor? savedDoctor;
+
+    for (final doctor in _doctors) {
+      if (doctor.name == doctorName &&
+          doctor.specialty == specialty) {
+        savedDoctor = doctor;
+        break;
+      }
+    }
+
+    if (savedDoctor == null) return;
+
+    setState(() => _selectedIndex = 1);
+
+    await _book(savedDoctor, draft: draft);
   }
 
   List<Appointment> get _upcoming {
@@ -135,6 +240,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    const titles = [
+      'MedBook',
+      'Find Doctors',
+      'Appointments',
+      'My Profile',
+    ];
+
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -156,12 +268,7 @@ class _HomeScreenState extends State<HomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  const [
-                    'MedBook',
-                    'Find Doctors',
-                    'Appointments',
-                    'My Profile',
-                  ][_selectedIndex],
+                  titles[_selectedIndex],
                   style: const TextStyle(
                     color: darkColor,
                     fontSize: 19,
@@ -192,12 +299,12 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       body: switch (_selectedIndex) {
-  0 => _homePage(),
-  1 => _doctorPage(),
-  2 => _appointmentPage(),
-  3 => _profilePage(),
-  _ => _homePage(),
-},
+        0 => _homePage(),
+        1 => _doctorPage(),
+        2 => _appointmentPage(),
+        3 => _profilePage(),
+        _ => _homePage(),
+      },
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) {
@@ -536,7 +643,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontWeight: FontWeight.w700,
                     fontSize: 11,
                   ),
-                  onSelected: (_) => setState(() => _specialty = specialty),
+                  onSelected: (_) {
+                    setState(() => _specialty = specialty);
+                  },
                 ),
               );
             }).toList(),
@@ -560,6 +669,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             itemCount: _filteredDoctors.length,
                             itemBuilder: (context, index) {
                               final doctor = _filteredDoctors[index];
+
                               return _doctorCard(
                                 doctor,
                                 () => _book(doctor),
@@ -993,34 +1103,54 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _book(Doctor doctor) async {
-    final nameController = TextEditingController(text: widget.user.name);
-    final reasonController = TextEditingController();
+  Future<void> _book(
+    Doctor doctor, {
+    Map<String, dynamic>? draft,
+  }) async {
+    final nameController = TextEditingController(
+      text: draft?['patientName'] as String? ?? widget.user.name,
+    );
 
-    DateTime selectedDate = DateTime.now().add(const Duration(days: 1));
-    String selectedTime = '09:00 AM';
+    final reasonController = TextEditingController(
+      text: draft?['reason'] as String? ?? '',
+    );
 
-    const times = [
-      '09:00 AM',
-      '10:00 AM',
-      '11:00 AM',
-      '01:00 PM',
-      '02:00 PM',
-      '03:00 PM',
-      '04:00 PM',
-    ];
+    DateTime selectedDate =
+        DateTime.tryParse(draft?['date'] as String? ?? '') ??
+            DateTime.now().add(const Duration(days: 1));
+
+    String selectedTime = draft?['time'] as String? ?? _times.first;
+
+    if (!_times.contains(selectedTime)) {
+      selectedTime = _times.first;
+    }
+
+    final formKey = GlobalKey<FormState>();
+
+    Future<void> saveDraft() async {
+      await _saveBookingDraft(
+        doctor: doctor,
+        patientName: nameController.text,
+        reason: reasonController.text,
+        date: selectedDate,
+        time: selectedTime,
+      );
+    }
 
     try {
+      await saveDraft();
+
+      if (!mounted) return;
+
       final appointment = await showDialog<Appointment>(
         context: context,
+        barrierDismissible: false,
         builder: (dialogContext) {
-          final formKey = GlobalKey<FormState>();
-
           return StatefulBuilder(
             builder: (context, setDialogState) {
               return AlertDialog(
                 title: const Text(
-                  'Book appointment',
+                  'Confirm booking',
                   style: TextStyle(
                     color: darkColor,
                     fontWeight: FontWeight.w800,
@@ -1054,14 +1184,18 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(height: 12),
                           TextFormField(
                             controller: nameController,
+                            textCapitalization: TextCapitalization.words,
                             decoration: const InputDecoration(
                               labelText: 'Patient name',
                               prefixIcon: Icon(Icons.person_outline),
                             ),
-                            validator: (value) =>
-                                value == null || value.trim().isEmpty
-                                    ? 'Enter the patient name.'
-                                    : null,
+                            onChanged: (_) => saveDraft(),
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Enter the patient name.';
+                              }
+                              return null;
+                            },
                           ),
                           const SizedBox(height: 12),
                           TextFormField(
@@ -1071,18 +1205,26 @@ class _HomeScreenState extends State<HomeScreen> {
                               labelText: 'Reason for visit',
                               prefixIcon: Icon(Icons.notes_rounded),
                             ),
-                            validator: (value) =>
-                                value == null || value.trim().isEmpty
-                                    ? 'Enter the reason for the visit.'
-                                    : null,
+                            onChanged: (_) => saveDraft(),
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Enter the reason for the visit.';
+                              }
+                              return null;
+                            },
                           ),
                           const SizedBox(height: 12),
                           OutlinedButton.icon(
                             onPressed: () async {
                               final now = DateTime.now();
+
                               final date = await showDatePicker(
-                                context: context,
-                                initialDate: selectedDate,
+                                context: dialogContext,
+                                initialDate: selectedDate.isBefore(
+                                  DateTime(now.year, now.month, now.day),
+                                )
+                                    ? DateTime(now.year, now.month, now.day)
+                                    : selectedDate,
                                 firstDate: DateTime(
                                   now.year,
                                   now.month,
@@ -1093,6 +1235,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                               if (date != null) {
                                 setDialogState(() => selectedDate = date);
+                                await saveDraft();
                               }
                             },
                             icon: const Icon(Icons.calendar_month_rounded),
@@ -1108,7 +1251,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               labelText: 'Appointment time',
                               prefixIcon: Icon(Icons.access_time_rounded),
                             ),
-                            items: times
+                            items: _times
                                 .map(
                                   (time) => DropdownMenuItem(
                                     value: time,
@@ -1116,11 +1259,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 )
                                 .toList(),
-                            onChanged: (value) {
-                              if (value != null) {
-                                setDialogState(() => selectedTime = value);
-                              }
+                            onChanged: (value) async {
+                              if (value == null) return;
+
+                              setDialogState(() => selectedTime = value);
+                              await saveDraft();
                             },
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Please check the details before confirming. Available times are sample times for this demo.',
+                            style: TextStyle(
+                              color: mutedColor,
+                              fontSize: 12,
+                              height: 1.4,
+                            ),
                           ),
                         ],
                       ),
@@ -1130,10 +1283,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.pop(dialogContext),
-                    child: const Text('Cancel'),
+                    child: const Text('Keep draft'),
                   ),
                   FilledButton(
-                    onPressed: () {
+                    onPressed: () async {
                       if (!formKey.currentState!.validate()) return;
 
                       final dateTime =
@@ -1143,6 +1296,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         _message('Choose a future appointment time.');
                         return;
                       }
+
+                      await saveDraft();
+
+                      if (!dialogContext.mounted) return;
 
                       Navigator.pop(
                         dialogContext,
@@ -1170,20 +1327,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
       try {
         await _storage.addAppointment(appointment);
+        await _clearBookingDraft();
         await _loadAppointments();
 
         if (!mounted) return;
+
         setState(() => _selectedIndex = 2);
         _message('Appointment saved successfully.');
       } catch (_) {
-        _message('Could not save appointment. Please try again.');
+        _message('Could not save appointment. Your draft is retained.');
       }
     } finally {
-  await Future<void>.delayed(const Duration(milliseconds: 400));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
 
-  nameController.dispose();
-  reasonController.dispose();
-  }
+      nameController.dispose();
+      reasonController.dispose();
+    }
   }
 
   DateTime _combineDateTime(DateTime date, String time) {
@@ -1203,17 +1362,9 @@ class _HomeScreenState extends State<HomeScreen> {
     DateTime selectedDate = DateTime.parse(appointment.appointmentDate);
     String selectedTime = DateFormat('hh:mm a').format(selectedDate);
 
-    const times = [
-      '09:00 AM',
-      '10:00 AM',
-      '11:00 AM',
-      '01:00 PM',
-      '02:00 PM',
-      '03:00 PM',
-      '04:00 PM',
-    ];
-
-    if (!times.contains(selectedTime)) selectedTime = times.first;
+    if (!_times.contains(selectedTime)) {
+      selectedTime = _times.first;
+    }
 
     final result = await showDialog<DateTime>(
       context: context,
@@ -1228,9 +1379,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   OutlinedButton.icon(
                     onPressed: () async {
                       final now = DateTime.now();
+
                       final date = await showDatePicker(
-                        context: context,
-                        initialDate: selectedDate.isBefore(now)
+                        context: dialogContext,
+                        initialDate: selectedDate.isBefore(
+                          DateTime(now.year, now.month, now.day),
+                        )
                             ? DateTime(now.year, now.month, now.day)
                                 .add(const Duration(days: 1))
                             : selectedDate,
@@ -1251,7 +1405,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   DropdownButtonFormField<String>(
                     initialValue: selectedTime,
                     decoration: const InputDecoration(labelText: 'New time'),
-                    items: times
+                    items: _times
                         .map(
                           (time) => DropdownMenuItem(
                             value: time,
@@ -1381,6 +1535,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (confirmed != true) return;
 
     await _storage.logout();
+
     if (mounted) widget.onLogout();
   }
 
